@@ -24,8 +24,7 @@ function makeFrag(maxIter) {
   return `
 precision highp float;
 uniform vec2 uResolution;
-uniform vec2 uCenterHi;
-uniform vec2 uCenterLo;
+uniform vec2 uCenter;
 uniform float uScale;
 uniform float uHue;
 uniform float uSat;
@@ -33,13 +32,6 @@ uniform float uVal;
 uniform int uScheme;
 
 #define MAX_ITER ${maxIter}
-
-// Simple double-float helpers (enough for much deeper zoom)
-vec2 dfAdd(vec2 a, float b) {
-  float hi = a.x + b;
-  float lo = b - (hi - a.x) + a.y;
-  return vec2(hi, lo);
-}
 
 vec3 hsv2rgb(vec3 c) {
   vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
@@ -54,18 +46,12 @@ vec3 cosinePalette(float t) {
 void main() {
   float aspect = uResolution.x / uResolution.y;
   vec2 uv = (gl_FragCoord.xy / uResolution) - 0.5;
+  vec2 c = uCenter + vec2(uv.x * uScale * aspect, uv.y * uScale);
 
-  // Offset with higher precision
-  vec2 cHi = uCenterHi;
-  vec2 cLo = uCenterLo;
-  cHi = dfAdd(cHi, uv.x * uScale * aspect);
-  cLo = dfAdd(cLo, uv.y * uScale);
-
-  float cx = cHi.x + cLo.x;
-  float cy = cHi.y + cLo.y;
-
-  float x = 0.0, y = 0.0;
-  float x2 = 0.0, y2 = 0.0;
+  float x = 0.0;
+  float y = 0.0;
+  float x2 = 0.0;
+  float y2 = 0.0;
   int iter = MAX_ITER;
 
   for (int i = 0; i < MAX_ITER; i++) {
@@ -73,14 +59,14 @@ void main() {
       iter = i;
       break;
     }
-    y = 2.0 * x * y + cy;
-    x = x2 - y2 + cx;
+    y = 2.0 * x * y + c.y;
+    x = x2 - y2 + c.x;
     x2 = x * x;
     y2 = y * y;
   }
 
   if (iter >= MAX_ITER) {
-    gl_FragColor = vec4(0.0);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
 
@@ -94,9 +80,9 @@ void main() {
     color = cosinePalette(t * 3.0) * uVal;
     color = mix(vec3(0.0), color, uSat);
   } else {
-    color = mix(vec3(0.0, 0.0, 0.1), vec3(1.0, 0.5, 0.0), pow(t, 0.5));
-    color = mix(color, vec3(1.0, 1.0, 0.5), pow(t, 2.0));
-    color = hsv2rgb(vec3(fract(t + uHue/360.0), uSat, uVal * length(color)));
+    color = mix(vec3(0.05, 0.0, 0.1), vec3(1.0, 0.4, 0.0), pow(t, 0.6));
+    color = mix(color, vec3(1.0, 0.9, 0.3), pow(t, 2.2));
+    color = hsv2rgb(vec3(fract(t * 2.0 + uHue/360.0), uSat, uVal));
   }
 
   gl_FragColor = vec4(color, 1.0);
@@ -115,14 +101,16 @@ function compileShader(src, type) {
 }
 
 let program;
-let maxIter = 400;
+let maxIter = 300;
 let aPosLoc = -1;
 
 function setupAttributes() {
   if (aPosLoc >= 0) gl.disableVertexAttribArray(aPosLoc);
   aPosLoc = gl.getAttribLocation(program, 'aPos');
-  gl.enableVertexAttribArray(aPosLoc);
-  gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 0, 0);
+  if (aPosLoc >= 0) {
+    gl.enableVertexAttribArray(aPosLoc);
+    gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 0, 0);
+  }
 }
 
 function rebuildProgram() {
@@ -147,36 +135,22 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.ST
 
 rebuildProgram();
 
-// Center stored as number (JS double) then split for GPU
-let centerX = -0.75;
-let centerY = 0.0;
+let center = [-0.75, 0.0];
 let scale = 2.5;
 let hue = 0;
 let sat = 0.8;
 let val = 1.0;
 let scheme = 0;
 
-function splitDouble(v) {
-  const hi = Math.fround(v);          // force to float32 range roughly
-  const lo = v - hi;
-  return [hi, lo];
-}
-
 function render() {
   gl.useProgram(program);
-
-  const [cxHi, cxLo] = splitDouble(centerX);
-  const [cyHi, cyLo] = splitDouble(centerY);
-
   gl.uniform2f(gl.getUniformLocation(program, 'uResolution'), canvas.width, canvas.height);
-  gl.uniform2f(gl.getUniformLocation(program, 'uCenterHi'), cxHi, cyHi);
-  gl.uniform2f(gl.getUniformLocation(program, 'uCenterLo'), cxLo, cyLo);
+  gl.uniform2f(gl.getUniformLocation(program, 'uCenter'), center[0], center[1]);
   gl.uniform1f(gl.getUniformLocation(program, 'uScale'), scale);
   gl.uniform1f(gl.getUniformLocation(program, 'uHue'), hue);
   gl.uniform1f(gl.getUniformLocation(program, 'uSat'), sat);
   gl.uniform1f(gl.getUniformLocation(program, 'uVal'), val);
   gl.uniform1i(gl.getUniformLocation(program, 'uScheme'), scheme);
-
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   requestAnimationFrame(render);
 }
@@ -194,11 +168,10 @@ document.getElementById('scheme').addEventListener('change', e => {
   scheme = e.target.selectedIndex;
 });
 document.getElementById('reset').addEventListener('click', () => {
-  centerX = -0.75;
-  centerY = 0.0;
+  center = [-0.75, 0.0];
   scale = 2.5;
-  maxIter = 400;
-  document.getElementById('iters').value = 400;
+  maxIter = 300;
+  document.getElementById('iters').value = 300;
   rebuildProgram();
 });
 
@@ -217,31 +190,31 @@ window.addEventListener('mousemove', e => {
   const dx = (e.clientX - lastX) / canvas.width;
   const dy = (e.clientY - lastY) / canvas.height;
   const aspect = canvas.width / canvas.height;
-  centerX -= dx * scale * aspect;
-  centerY += dy * scale;
+  center[0] -= dx * scale * aspect;
+  center[1] += dy * scale;
   lastX = e.clientX;
   lastY = e.clientY;
 });
 
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const factor = e.deltaY > 0 ? 1.12 : 0.89;
+  const factor = e.deltaY > 0 ? 1.1 : 0.9;
   const mx = (e.clientX / canvas.width - 0.5) * scale * (canvas.width / canvas.height);
   const my = (0.5 - e.clientY / canvas.height) * scale;
-  centerX += mx * (1 - factor);
-  centerY += my * (1 - factor);
+  center[0] += mx * (1 - factor);
+  center[1] += my * (1 - factor);
   scale *= factor;
 
-  // Auto quality
-  const suggested = Math.min(1200, Math.max(200, Math.round(250 + Math.log2(2.5 / Math.max(scale, 1e-12)) * 50)));
-  if (Math.abs(suggested - maxIter) > 40) {
+  // Gentle auto quality increase
+  const suggested = Math.min(800, Math.max(150, Math.round(200 + Math.log2(Math.max(2.5 / scale, 1)) * 35)));
+  if (Math.abs(suggested - maxIter) > 25) {
     maxIter = suggested;
     document.getElementById('iters').value = maxIter;
     rebuildProgram();
   }
 }, { passive: false });
 
-// Touch
+// Touch support
 let touches = [];
 canvas.addEventListener('touchstart', e => {
   touches = [...e.touches];
@@ -252,8 +225,8 @@ canvas.addEventListener('touchmove', e => {
     const dx = (e.touches[0].clientX - touches[0].clientX) / canvas.width;
     const dy = (e.touches[0].clientY - touches[0].clientY) / canvas.height;
     const aspect = canvas.width / canvas.height;
-    centerX -= dx * scale * aspect;
-    centerY += dy * scale;
+    center[0] -= dx * scale * aspect;
+    center[1] += dy * scale;
   } else if (e.touches.length === 2 && touches.length === 2) {
     const d1 = Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     const d2 = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);

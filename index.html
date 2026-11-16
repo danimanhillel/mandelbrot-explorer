@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mandelbrot Explorer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="controls">
+    <h2>Mandelbrot Explorer</h2>
+    <label>Hue Shift <input type="range" id="hue" min="0" max="360" value="0"></label>
+    <label>Saturation <input type="range" id="sat" min="0" max="1" step="0.01" value="0.8"></label>
+    <label>Brightness <input type="range" id="val" min="0" max="1" step="0.01" value="1.0"></label>
+    <label>Max Iterations <input type="range" id="iters" min="50" max="1000" value="300"></label>
+    <label>Color Scheme
+      <select id="scheme">
+        <option value="hsv">HSV</option>
+        <option value="cosine">Cosine</option>
+        <option value="fire">Fire</option>
+      </select>
+    </label>
+    <button id="reset">Reset View</button>
+    <div id="info">Scroll to zoom • Drag to pan</div>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

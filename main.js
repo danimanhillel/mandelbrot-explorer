@@ -24,7 +24,8 @@ function makeFrag(maxIter) {
   return `
 precision highp float;
 uniform vec2 uResolution;
-uniform vec2 uCenter;
+uniform vec2 uCenterHi;
+uniform vec2 uCenterLo;
 uniform float uScale;
 uniform float uHue;
 uniform float uSat;
@@ -32,6 +33,13 @@ uniform float uVal;
 uniform int uScheme;
 
 #define MAX_ITER ${maxIter}
+
+// Simple double-float helpers (enough for much deeper zoom)
+vec2 dfAdd(vec2 a, float b) {
+  float hi = a.x + b;
+  float lo = b - (hi - a.x) + a.y;
+  return vec2(hi, lo);
+}
 
 vec3 hsv2rgb(vec3 c) {
   vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
@@ -46,7 +54,15 @@ vec3 cosinePalette(float t) {
 void main() {
   float aspect = uResolution.x / uResolution.y;
   vec2 uv = (gl_FragCoord.xy / uResolution) - 0.5;
-  vec2 c = uCenter + vec2(uv.x * uScale * aspect, uv.y * uScale);
+
+  // Offset with higher precision
+  vec2 cHi = uCenterHi;
+  vec2 cLo = uCenterLo;
+  cHi = dfAdd(cHi, uv.x * uScale * aspect);
+  cLo = dfAdd(cLo, uv.y * uScale);
+
+  float cx = cHi.x + cLo.x;
+  float cy = cHi.y + cLo.y;
 
   float x = 0.0, y = 0.0;
   float x2 = 0.0, y2 = 0.0;
@@ -57,8 +73,8 @@ void main() {
       iter = i;
       break;
     }
-    y = 2.0 * x * y + c.y;
-    x = x2 - y2 + c.x;
+    y = 2.0 * x * y + cy;
+    x = x2 - y2 + cx;
     x2 = x * x;
     y2 = y * y;
   }
@@ -99,7 +115,7 @@ function compileShader(src, type) {
 }
 
 let program;
-let maxIter = 300;
+let maxIter = 400;
 let aPosLoc = -1;
 
 function setupAttributes() {
@@ -125,29 +141,42 @@ function rebuildProgram() {
   setupAttributes();
 }
 
-// Buffer once
 const buf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, buf);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
 
 rebuildProgram();
 
-let center = [-0.75, 0.0];
+// Center stored as number (JS double) then split for GPU
+let centerX = -0.75;
+let centerY = 0.0;
 let scale = 2.5;
 let hue = 0;
 let sat = 0.8;
 let val = 1.0;
 let scheme = 0;
 
+function splitDouble(v) {
+  const hi = Math.fround(v);          // force to float32 range roughly
+  const lo = v - hi;
+  return [hi, lo];
+}
+
 function render() {
   gl.useProgram(program);
+
+  const [cxHi, cxLo] = splitDouble(centerX);
+  const [cyHi, cyLo] = splitDouble(centerY);
+
   gl.uniform2f(gl.getUniformLocation(program, 'uResolution'), canvas.width, canvas.height);
-  gl.uniform2f(gl.getUniformLocation(program, 'uCenter'), center[0], center[1]);
+  gl.uniform2f(gl.getUniformLocation(program, 'uCenterHi'), cxHi, cyHi);
+  gl.uniform2f(gl.getUniformLocation(program, 'uCenterLo'), cxLo, cyLo);
   gl.uniform1f(gl.getUniformLocation(program, 'uScale'), scale);
   gl.uniform1f(gl.getUniformLocation(program, 'uHue'), hue);
   gl.uniform1f(gl.getUniformLocation(program, 'uSat'), sat);
   gl.uniform1f(gl.getUniformLocation(program, 'uVal'), val);
   gl.uniform1i(gl.getUniformLocation(program, 'uScheme'), scheme);
+
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   requestAnimationFrame(render);
 }
@@ -165,10 +194,11 @@ document.getElementById('scheme').addEventListener('change', e => {
   scheme = e.target.selectedIndex;
 });
 document.getElementById('reset').addEventListener('click', () => {
-  center = [-0.75, 0.0];
+  centerX = -0.75;
+  centerY = 0.0;
   scale = 2.5;
-  maxIter = 300;
-  document.getElementById('iters').value = 300;
+  maxIter = 400;
+  document.getElementById('iters').value = 400;
   rebuildProgram();
 });
 
@@ -187,31 +217,31 @@ window.addEventListener('mousemove', e => {
   const dx = (e.clientX - lastX) / canvas.width;
   const dy = (e.clientY - lastY) / canvas.height;
   const aspect = canvas.width / canvas.height;
-  center[0] -= dx * scale * aspect;
-  center[1] += dy * scale;
+  centerX -= dx * scale * aspect;
+  centerY += dy * scale;
   lastX = e.clientX;
   lastY = e.clientY;
 });
 
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const factor = e.deltaY > 0 ? 1.1 : 0.9;
+  const factor = e.deltaY > 0 ? 1.12 : 0.89;
   const mx = (e.clientX / canvas.width - 0.5) * scale * (canvas.width / canvas.height);
   const my = (0.5 - e.clientY / canvas.height) * scale;
-  center[0] += mx * (1 - factor);
-  center[1] += my * (1 - factor);
+  centerX += mx * (1 - factor);
+  centerY += my * (1 - factor);
   scale *= factor;
 
-  // Auto-increase quality a bit when zooming deep (helps "sharpen")
-  const suggested = Math.min(1000, Math.max(150, Math.round(200 + Math.log2(2.5 / scale) * 40)));
-  if (Math.abs(suggested - maxIter) > 30) {
+  // Auto quality
+  const suggested = Math.min(1200, Math.max(200, Math.round(250 + Math.log2(2.5 / Math.max(scale, 1e-12)) * 50)));
+  if (Math.abs(suggested - maxIter) > 40) {
     maxIter = suggested;
     document.getElementById('iters').value = maxIter;
     rebuildProgram();
   }
 }, { passive: false });
 
-// Touch support
+// Touch
 let touches = [];
 canvas.addEventListener('touchstart', e => {
   touches = [...e.touches];
@@ -222,13 +252,12 @@ canvas.addEventListener('touchmove', e => {
     const dx = (e.touches[0].clientX - touches[0].clientX) / canvas.width;
     const dy = (e.touches[0].clientY - touches[0].clientY) / canvas.height;
     const aspect = canvas.width / canvas.height;
-    center[0] -= dx * scale * aspect;
-    center[1] += dy * scale;
+    centerX -= dx * scale * aspect;
+    centerY += dy * scale;
   } else if (e.touches.length === 2 && touches.length === 2) {
     const d1 = Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     const d2 = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    const factor = d1 / d2;
-    scale *= factor;
+    scale *= d1 / d2;
   }
   touches = [...e.touches];
 }, { passive: false });

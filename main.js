@@ -78,7 +78,6 @@ void main() {
     color = cosinePalette(t * 3.0) * uVal;
     color = mix(vec3(0.0), color, uSat);
   } else {
-    // Fire
     color = mix(vec3(0.0, 0.0, 0.1), vec3(1.0, 0.5, 0.0), pow(t, 0.5));
     color = mix(color, vec3(1.0, 1.0, 0.5), pow(t, 2.0));
     color = hsv2rgb(vec3(fract(t + uHue/360.0), uSat, uVal * length(color)));
@@ -101,6 +100,14 @@ function compileShader(src, type) {
 
 let program;
 let maxIter = 300;
+let aPosLoc = -1;
+
+function setupAttributes() {
+  if (aPosLoc >= 0) gl.disableVertexAttribArray(aPosLoc);
+  aPosLoc = gl.getAttribLocation(program, 'aPos');
+  gl.enableVertexAttribArray(aPosLoc);
+  gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 0, 0);
+}
 
 function rebuildProgram() {
   if (program) gl.deleteProgram(program);
@@ -115,15 +122,15 @@ function rebuildProgram() {
     throw new Error('Program link failed');
   }
   gl.useProgram(program);
+  setupAttributes();
 }
-rebuildProgram();
 
+// Buffer once
 const buf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, buf);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-const loc = gl.getAttribLocation(program, 'aPos');
-gl.enableVertexAttribArray(loc);
-gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+rebuildProgram();
 
 let center = [-0.75, 0.0];
 let scale = 2.5;
@@ -160,6 +167,9 @@ document.getElementById('scheme').addEventListener('change', e => {
 document.getElementById('reset').addEventListener('click', () => {
   center = [-0.75, 0.0];
   scale = 2.5;
+  maxIter = 300;
+  document.getElementById('iters').value = 300;
+  rebuildProgram();
 });
 
 // Interaction
@@ -191,6 +201,14 @@ canvas.addEventListener('wheel', e => {
   center[0] += mx * (1 - factor);
   center[1] += my * (1 - factor);
   scale *= factor;
+
+  // Auto-increase quality a bit when zooming deep (helps "sharpen")
+  const suggested = Math.min(1000, Math.max(150, Math.round(200 + Math.log2(2.5 / scale) * 40)));
+  if (Math.abs(suggested - maxIter) > 30) {
+    maxIter = suggested;
+    document.getElementById('iters').value = maxIter;
+    rebuildProgram();
+  }
 }, { passive: false });
 
 // Touch support
